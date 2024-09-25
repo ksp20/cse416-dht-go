@@ -9,9 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/ipfs/go-cid"
@@ -30,11 +28,9 @@ import (
 )
 
 var (
-	node_id         = "SBU_ID" // give your SBU ID
-	port            = 61005
-	relay_node_addr = "/ip4/130.245.173.222/tcp/4000/p2p/12D3KooWSMDFN5DeFADosuV7UEwjHWQv1ioLEUqgzjGjxYQzxFX6"
-	//"/ip4/130.245.173.221/tcp/4001/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN"
-	bootstrap_node_addr = "/ip4/130.245.173.222/tcp/61000/p2p/12D3KooWPcfGdBCrdxX9nqGAdPAdkPMqfKEDjbZWGA4UFBJuY4rP"
+	node_id             = "SBU_Id" // give your SBU ID
+	relay_node_addr     = "/ip4/130.245.173.221/tcp/4001/p2p/12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN"
+	bootstrap_node_addr = "/ip4/130.245.173.222/tcp/61000/p2p/12D3KooWQd1K1k8XA9xVEzSAu7HUCodC7LJB6uW5Kw4VwkRdstPE"
 	globalCtx           context.Context
 )
 
@@ -50,26 +46,10 @@ func generatePrivateKeyFromSeed(seed []byte) (crypto.PrivKey, error) {
 	return privKey, nil
 }
 
-func isPortAvailable(port int) bool {
-	address := fmt.Sprintf("0.0.0.0:%d", port)
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		return false
-	}
-	listener.Close()
-	return true
-}
-
 func createNode() (host.Host, *dht.IpfsDHT, error) {
 	ctx := context.Background()
-	node_addr := port
 	seed := []byte(node_id)
-	for !isPortAvailable(node_addr) {
-		node_addr++
-	}
-	portStr := strconv.Itoa(node_addr)
-
-	customAddr, err := multiaddr.NewMultiaddr("/ip4/0.0.0.0/tcp/" + portStr)
+	customAddr, err := multiaddr.NewMultiaddr("/ip4/0.0.0.0/tcp/0")
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse multiaddr: %w", err)
 	}
@@ -106,12 +86,12 @@ func createNode() (host.Host, *dht.IpfsDHT, error) {
 		log.Printf("Failed to instantiate the relay: %v", err)
 	}
 
-	dhtRouting, err := dht.New(ctx, node, dht.Mode(dht.ModeServer))
+	dhtRouting, err := dht.New(ctx, node, dht.Mode(dht.ModeClient))
 	if err != nil {
 		return nil, nil, err
 	}
 	namespacedValidator := record.NamespacedValidator{
-		"myapp": &CustomValidator{}, // Add a custom validator for the "myapp" namespace
+		"orcanet": &CustomValidator{}, // Add a custom validator for the "orcanet" namespace
 	}
 
 	dhtRouting.Validator = namespacedValidator // Configure the DHT to use the custom validator
@@ -125,7 +105,7 @@ func createNode() (host.Host, *dht.IpfsDHT, error) {
 	// Set up notifications for new connections
 	node.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(n network.Network, conn network.Conn) {
-			fmt.Printf("New peer connected: %s\n", conn.RemotePeer().String())
+			fmt.Printf("Notification: New peer connected %s\n", conn.RemotePeer().String())
 		},
 	})
 
@@ -155,9 +135,33 @@ func connectToPeer(node host.Host, peerAddr string) {
 	fmt.Println("Connected to:", info.ID)
 }
 
+func connectToPeerUsingRelay(node host.Host, peerAddrStr string) {
+	ctx := globalCtx
+	peerAddrStr = strings.TrimSpace(peerAddrStr)
+	relayAddr, err := multiaddr.NewMultiaddr(relay_node_addr)
+	if err != nil {
+		log.Printf("Failed to create relay multiaddr: %v", err)
+	}
+	peerMultiaddr := relayAddr.Encapsulate(multiaddr.StringCast("/p2p-circuit/p2p/" + peerAddrStr))
+
+	relayedAddrInfo, err := peer.AddrInfoFromP2pAddr(peerMultiaddr)
+	if err != nil {
+		log.Println("Failed to get relayed AddrInfo: %w", err)
+		return
+	}
+	// Connect to the peer through the relay
+	err = node.Connect(ctx, *relayedAddrInfo)
+	if err != nil {
+		log.Println("Failed to connect to peer through relay: %w", err)
+		return
+	}
+
+	fmt.Printf("Connected to peer via relay: %s\n", peerAddrStr)
+}
+
 func handlePeerExchange(node host.Host) {
 	relayInfo, _ := peer.AddrInfoFromString(relay_node_addr)
-	node.SetStreamHandler("/peer-exchange/1.0.0", func(s network.Stream) {
+	node.SetStreamHandler("/orcanet/p2p", func(s network.Stream) {
 		defer s.Close()
 
 		buf := bufio.NewReader(s)
@@ -186,29 +190,6 @@ func handlePeerExchange(node host.Host) {
 			}
 		}
 	})
-}
-
-func connectToPeerUsingRelay(node host.Host, peerAddrStr string) {
-	ctx := globalCtx
-	peerAddrStr = strings.TrimSpace(peerAddrStr)
-	peerAddr, err := multiaddr.NewMultiaddr(relay_node_addr)
-	if err != nil {
-		log.Printf("Failed to create relay multiaddr: %v", err)
-	}
-	peerMultiaddr := peerAddr.Encapsulate(multiaddr.StringCast("/p2p-circuit/p2p/" + peerAddrStr))
-	relayedAddrInfo, err := peer.AddrInfoFromP2pAddr(peerMultiaddr)
-	if err != nil {
-		log.Println("Failed to get relayed AddrInfo: %w", err)
-		return
-	}
-	// Connect to the peer through the relay
-	err = node.Connect(ctx, *relayedAddrInfo)
-	if err != nil {
-		log.Println("Failed to connect to peer through relay: %w", err)
-		return
-	}
-
-	fmt.Printf("Connected to peer via relay: %s\n", peerAddrStr)
 }
 
 func main() {
@@ -256,7 +237,7 @@ func handleInput(ctx context.Context, dht *dht.IpfsDHT) {
 				continue
 			}
 			key := args[1]
-			dhtKey := "/myapp/" + key
+			dhtKey := "/orcanet/" + key
 			res, err := dht.GetValue(ctx, dhtKey)
 			if err != nil {
 				fmt.Printf("Failed to get record: %v\n", err)
@@ -296,16 +277,16 @@ func handleInput(ctx context.Context, dht *dht.IpfsDHT) {
 				fmt.Println("Expected key and value")
 				continue
 			}
-			log.Println(args[1])
 			key := args[1]
 			value := args[2]
-			dhtKey := "/myapp/" + key
+			dhtKey := "/orcanet/" + key
+			log.Println(dhtKey)
 			err := dht.PutValue(ctx, dhtKey, []byte(value))
 			if err != nil {
 				fmt.Printf("Failed to put record: %v\n", err)
 				continue
 			}
-			provideKey(ctx, dht, key)
+			// provideKey(ctx, dht, key)
 			fmt.Println("Record stored successfully")
 
 		case "PUT_PROVIDER":
