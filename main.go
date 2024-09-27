@@ -135,14 +135,14 @@ func connectToPeer(node host.Host, peerAddr string) {
 	fmt.Println("Connected to:", info.ID)
 }
 
-func connectToPeerUsingRelay(node host.Host, peerAddrStr string) {
+func connectToPeerUsingRelay(node host.Host, targetPeerID string) {
 	ctx := globalCtx
-	peerAddrStr = strings.TrimSpace(peerAddrStr)
+	targetPeerID = strings.TrimSpace(targetPeerID)
 	relayAddr, err := multiaddr.NewMultiaddr(relay_node_addr)
 	if err != nil {
 		log.Printf("Failed to create relay multiaddr: %v", err)
 	}
-	peerMultiaddr := relayAddr.Encapsulate(multiaddr.StringCast("/p2p-circuit/p2p/" + peerAddrStr))
+	peerMultiaddr := relayAddr.Encapsulate(multiaddr.StringCast("/p2p-circuit/p2p/" + targetPeerID))
 
 	relayedAddrInfo, err := peer.AddrInfoFromP2pAddr(peerMultiaddr)
 	if err != nil {
@@ -156,7 +156,7 @@ func connectToPeerUsingRelay(node host.Host, peerAddrStr string) {
 		return
 	}
 
-	fmt.Printf("Connected to peer via relay: %s\n", peerAddrStr)
+	fmt.Printf("Connected to peer via relay: %s\n", targetPeerID)
 }
 
 func handlePeerExchange(node host.Host) {
