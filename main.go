@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p"
@@ -159,6 +160,57 @@ func connectToPeerUsingRelay(node host.Host, targetPeerID string) {
 	fmt.Printf("Connected to peer via relay: %s\n", targetPeerID)
 }
 
+func receiveDataFromPeer(node host.Host) {
+	// Set a stream handler to listen for incoming streams on the "/senddata/p2p" protocol
+	node.SetStreamHandler("/senddata/p2p", func(s network.Stream) {
+		defer s.Close()
+		// Create a buffered reader to read data from the stream
+		buf := bufio.NewReader(s)
+		// Read data from the stream
+		data, err := buf.ReadBytes('\n') // Reads until a newline character
+		if err != nil {
+			if err == io.EOF {
+				log.Printf("Stream closed by peer: %s", s.Conn().RemotePeer())
+			} else {
+				log.Printf("Error reading from stream: %v", err)
+			}
+			return
+		}
+		// Print the received data
+		log.Printf("Received data: %s", data)
+	})
+}
+
+func sendDataToPeer(node host.Host, targetpeerid string) {
+	var ctx = context.Background()
+	targetPeerID := strings.TrimSpace(targetpeerid)
+	relayAddr, err := multiaddr.NewMultiaddr(relay_node_addr)
+	if err != nil {
+		log.Printf("Failed to create relay multiaddr: %v", err)
+	}
+	peerMultiaddr := relayAddr.Encapsulate(multiaddr.StringCast("/p2p-circuit/p2p/" + targetPeerID))
+
+	peerinfo, err := peer.AddrInfoFromP2pAddr(peerMultiaddr)
+	if err != nil {
+		log.Fatalf("Failed to parse peer address: %s", err)
+	}
+	if err := node.Connect(ctx, *peerinfo); err != nil {
+		log.Printf("Failed to connect to peer %s via relay: %v", peerinfo.ID, err)
+		return
+	}
+	s, err := node.NewStream(network.WithAllowLimitedConn(ctx, "/senddata/p2p"), peerinfo.ID, "/senddata/p2p")
+	if err != nil {
+		log.Printf("Failed to open stream to %s: %s", peerinfo.ID, err)
+		return
+	}
+	defer s.Close()
+	_, err = s.Write([]byte("sending hello to peer\n"))
+	if err != nil {
+		log.Fatalf("Failed to write to stream: %s", err)
+	}
+
+}
+
 func handlePeerExchange(node host.Host) {
 	relayInfo, _ := peer.AddrInfoFromString(relay_node_addr)
 	node.SetStreamHandler("/orcanet/p2p", func(s network.Stream) {
@@ -205,11 +257,15 @@ func main() {
 	fmt.Println("Node multiaddresses:", node.Addrs())
 	fmt.Println("Node Peer ID:", node.ID())
 
-	connectToPeer(node, relay_node_addr)     // connect to relay node
-	makeReservation(node)                    // make reservation on realy node
+	connectToPeer(node, relay_node_addr) // connect to relay node
+	makeReservation(node)                // make reservation on realy node
+	go refreshReservation(node, 10*time.Minute)
 	connectToPeer(node, bootstrap_node_addr) // connect to bootstrap node
 	go handlePeerExchange(node)
 	go handleInput(ctx, dht)
+
+	// receiveDataFromPeer(node)
+	// sendDataToPeer(node, "12D3KooWKNWVMpDh5ZWpFf6757SngZfyobsTXA8WzAWqmAjgcdE6")
 
 	defer node.Close()
 
@@ -330,4 +386,19 @@ func makeReservation(node host.Host) {
 		log.Fatalf("Failed to make reservation on relay: %v", err)
 	}
 	fmt.Printf("Reservation successfull \n")
+}
+
+func refreshReservation(node host.Host, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			makeReservation(node)
+		case <-globalCtx.Done():
+			fmt.Println("Context done, stopping reservation refresh.")
+			return
+		}
+	}
 }
