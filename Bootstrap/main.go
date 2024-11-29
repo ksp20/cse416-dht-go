@@ -239,8 +239,8 @@ func handleInput(ctx context.Context, dht *dht.IpfsDHT) {
 	fmt.Print("User Input \n ")
 	for {
 		fmt.Print("> ")
-		input, _ := reader.ReadString('\n') // Read input from keyboard
-		input = strings.TrimSpace(input)    // Trim any trailing newline or spaces
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
 		args := strings.Split(input, " ")
 		if len(args) < 1 {
 			fmt.Println("No command provided")
